@@ -1,36 +1,31 @@
 # The Unofficial Guide
 
-<!-- Replace this line with your name and which corpus you picked. -->
+Bryan Qi -- Corpus: adivce_threads
 
-> **This file is your submission.** Fill it in as you go — most sections get
-> written during the milestone that produces them, not at the end.
->
-> How the starter works, and every command you'll need, is in `RUNNING.md`.
-> Leave that file alone.
->
-> **Paste everything as text.** No screenshots, no video. A typed table gets
-> full credit; a picture of the same table gets none.
->
-> Delete these instruction blocks as you replace them. The `<!-- -->` comments
-> are notes to you and don't show up when the page renders — you can leave them
-> or remove them.
-
----
 
 # Unit 1
 
 ## What This Does
 
-<!-- Three or four sentences. Which corpus you picked, and the kinds of
-     questions your system answers. Write it for someone who has never seen
-     this repo.
+This is a RAG question answering system for the `advice_threads` corpus that consists of 23 forum threads in which students ask a question about university life and other students reply. 
+Ask it a question in that territory and it retrieves the replies that bear on it and writes an answer that cites the thread each claim came from. 
+Ask it something the corpus has no opinion about and a distance cutoff stops it before it answers.
 
-     Milestone 5. -->
 
 ## Chunking Strategy
 
 **Chunk size:**
+A reply + the originla question prepended. The chunk size is not a fixed number. In practice it is around 132–281 characters, 202 on average. 
+
 **Overlap:**
+There is no overlap in the reply in each chunk, but the `THREAD:` question line is repeated at the top of every chunk (~50 characters), which is deliberate duplication to help with relevant context retrieval rather than overlap.
+
+Every file in `advice_threads` is less than the starter 800 character window. It produced 26 chunks from 23 documents, which voids the benefits of chunking.
+
+Initially, the plan was to divide each document into 3 evenly split chunks. However, this led to overlap and potential context loss if the chunk with the remaining information wasn't retrieved.  
+
+Instead, I realized that the replies of the threads could be easily identified and separated by the rely header ex. `--- reply 3 (19 votes) ---`. This RAG chunks each document so that each chunk is a full reply. Since the replies are generally never really long, it doesn't create huge chunks. Morever, to help with finding relevant information in the retrieval section, the original question is prepended to each chunk. The relevant keywords don't have to be necessarily in the reply itself.  
+
 
 <!-- What about YOUR documents made you pick these numbers? Short posts and
      long sectioned guides don't want the same chunking, and "800 seemed
@@ -155,8 +150,10 @@ Sources retrieved: thread_first_gen.txt, thread_first_year_regret.txt, thread_st
      Milestone 5. -->
 
 **1.**
+I came up with the original idea to chunk each document into evenly sized thirds. I asked claude to help me evaluate my idea, and it identified a few problems that came from chunking in the middle of sentences. It helped me identify that a better strategy would be to chunk so that each chunk coveres an entire reply. I modified this idea by adding that each chunk should also contain the original question as well. 
 
 **2.**
+I asked Claude to implement the improved chunking strategy. It did so, but left in the original chunking in thirds code, so I had to remove that manually. 
 
 <!-- ── Stretch features ─────────────────────────────────────────────────────
      Doing one? Say so here BEFORE you start. A feature this README never
