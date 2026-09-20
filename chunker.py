@@ -22,10 +22,14 @@ to it, write down what you saw, and move on. That's a real observation about
 your pipeline, not giving up.
 """
 
+import re
 from dataclasses import dataclass
 
 import config
 from ingest import Document
+
+# Splits before "--- reply N (X votes) ---" without consuming it.
+REPLY_MARKER = re.compile(r"(?=^--- reply )", re.M)
 
 
 @dataclass
@@ -82,22 +86,56 @@ def fallback_split(
 
 def split_documents(documents: list[Document]) -> list[Chunk]:
     """
-    Split documents into chunks. ⚠️ REPLACE THE BODY OF THIS IN MILESTONE 3.
+    One chunk per reply, with the thread question prepended to each.
 
-    Right now it just calls the fallback. That is the plain, generic behaviour
-    the brief is talking about.
+    The advice_threads documents are short forum threads that already carry
+    their own structure: a `THREAD:` line, then replies marked
+    `--- reply N (X votes) ---`. Each reply is one person giving one piece of
+    advice, so a reply is the natural unit to retrieve.
 
-    When you write your own strategy, set `produced_by` to
-    "chunker.py::split_documents" so your README's Sample Chunks section names
-    the right function. `app.py chunks` prints that string for you.
+    Cutting on those markers instead of on a character count means no chunk
+    ever ends mid-sentence. The thread question is repeated at the top of every
+    chunk so that a reply like "depends whether your building has a kitchen"
+    still embeds near the topic it is answering, instead of floating free of
+    the question that gave it meaning.
 
-    Things worth thinking about before you write any code:
-      - Are your documents short posts or long guides?
-      - Is the useful information in one sentence, or spread over a paragraph?
-      - Would splitting on paragraph breaks keep more thoughts intact than
-        splitting on a character count?
+    A document with no reply markers stays one chunk.
     """
-    return fallback_split(documents)
+    chunks: list[Chunk] = []
+    for doc in documents:
+        if not doc.text.strip():
+            continue
+
+        # Split before each reply marker, keeping the marker with its reply.
+        parts = [p.strip() for p in REPLY_MARKER.split(doc.text) if p.strip()]
+
+        # Anything before the first marker is the thread question. If the
+        # document has no markers at all, there is nothing to split.
+        if parts and not parts[0].startswith("--- reply"):
+            header, replies = parts[0], parts[1:]
+        else:
+            header, replies = "", parts
+
+        if not replies:
+            replies = [header] if header else []
+            header = ""
+
+        for index, reply in enumerate(replies):
+            text = f"{header}\n\n{reply}" if header else reply
+            chunks.append(
+                Chunk(
+                    text=text,
+                    source=doc.source,
+                    index=index,
+                    produced_by="chunker.py::split_documents",
+                )
+            )
+
+    return chunks
+
+    # Earlier strategies, kept so it is easy to switch back and compare:
+    # return split_into_thirds(documents)
+    # return fallback_split(documents)
 
 
 def describe(chunks: list[Chunk]) -> str:
