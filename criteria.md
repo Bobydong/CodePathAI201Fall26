@@ -23,8 +23,8 @@ For at least 4 of my 5 test questions, the retrieved chunks include one that
 contains the answer.
 
 **Why this target:**
-<!-- e.g. "One of my questions is about a topic only two documents mention, so
-     I expect that one to be hard." -->
+I want a high success rate, but inevitably there will be some failures in a non-deterministic system like this. 
+The goal is the minimize those error rates.
 
 ---
 
@@ -33,8 +33,9 @@ contains the answer.
 Every answer the system produces names at least one source document.
 
 **Why this target:**
-<!-- Why all five and not four? What about your setup makes that achievable —
-     or what would have to go wrong for it not to be? -->
+To promote trust in the system and allow fact-checking, a source should be cited in each response. 
+Citing a source also gives insight into what the RAG pipeline did to lead to its output in case there is an incorrect response;
+it can help with debugging later on.
 
 ---
 
@@ -52,33 +53,21 @@ in at least 4 of 5 tries.
 **Why this target:**
 <!-- What did your distances look like when you set the cutoff in Milestone 4?
      Was there a clean gap, or did the two groups overlap? -->
+This makes sure the system isn't hallucinating and doesn't try to confidently answer anything it has no context on. 
 
 ---
 
 ## 4. Something about your chunks
-
-<!-- YOU WRITE THIS ONE.
-
-     How would you know if your chunks were the right size? Name something
-     countable or observable.
-
-     Examples of the right shape — don't copy these, they should come from
-     what you actually saw in Milestone 3:
-       - "At least 4 of 5 sampled chunks read as a complete thought, with no
-          sentence cut in half at either end."
-       - "No chunk is shorter than 200 characters, since anything below that
-          in my corpus turned out to be a heading with no content under it." -->
-
-
+At least 80% of the chunks that are retrieved and given as context to the LLM must contain relevant content. 
 
 **Why this target:**
-
+This allows us to modify the chunk size and number of chunks dynamically while maintaining a certain level of conext quality.
 
 
 ---
 
 ## 5. Your choice
-
+Each response must take less than 1.8 seconds.
 <!-- YOU WRITE THIS ONE TOO.
 
      Pick something you actually care about getting right. It could be about
@@ -87,11 +76,8 @@ in at least 4 of 5 tries.
      present — anything, as long as it names a number or an observable
      outcome. -->
 
-
-
 **Why this target:**
-
-
+In a business-critical system, where informaton-based decisions are being made constantly, saving time in how fast one retrieves that information can compound in improving efficiency over time. 
 
 ---
 
