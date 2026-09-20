@@ -12,9 +12,6 @@ Under each one, write a sentence or two on **why that target** and not a
 stricter or looser one. A reason that says something about your corpus or your
 pipeline earns credit; *"80% seemed reasonable"* does not.
 
-> Missing your own targets next unit costs you nothing. Setting a target so
-> easy you can't miss it does.
-
 ---
 
 ## 1. Retrieved chunks contain the answer
