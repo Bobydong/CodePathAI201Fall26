@@ -105,13 +105,20 @@ The library being open until 2am is a trap. It's a resource, not a schedule.
      visible. Milestone 4. -->
 
 **Question:**
-
+What do people say about the importance of textbook editions?
 **Answer:**
-
 ```
+(best distance 0.486, cutoff 0.7)
+
+According to `thread_textbook_editions.txt`, you should ask your instructor directly, as most will say the previous edition is fine even if procurement reasons prevent them from putting that in the syllabus. Additionally, you can check the numbering of the current edition for free using the library reserve copy (`thread_textbook_editions.txt`).
+
+Sources retrieved: thread_first_gen.txt, thread_first_year_regret.txt, thread_study_spots.txt, thread_textbook_editions.txt
+
+1 model calls this session, 521 tokens (450 in, 71 out)
 ```
 
 **My relevance cutoff:**
+0.7
 
 <!-- The number you set in config.py, and how you got there.
 
@@ -124,7 +131,17 @@ The library being open until 2am is a trap. It's a resource, not a schedule.
 
 | Question | In corpus? | Best distance |
 |---|---|---|
-|  |  |  |
+| How do I write a for loop in Rust | No | 0.835 |
+| What is the recommended dosage of ibuprofen for a headache? | No | 0.807 |
+| Who won the 1994 World Cup? | No | 0.893 |
+| How do I change the oil in a diesel engine? | No | 0.896 |
+| What is the capital of Mongolia? | No | 0.893 |
+| How much memory should my laptop have for CS courses? | Yes | 0.334 |
+| What do people say about using pass/fail for grades? | Yes | 0.486 |
+| Is it worth it do get a parking permit? | Yes | 0.284 |
+| What do people say about using pass/fail for grades? | Yes | 0.275 |
+| How much memory should my laptop have for CS courses? | Yes | 0.159 |
+
 
 ## How I Used AI
 
