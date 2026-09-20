@@ -53,7 +53,7 @@ in at least 4 of 5 tries.
 **Why this target:**
 <!-- What did your distances look like when you set the cutoff in Milestone 4?
      Was there a clean gap, or did the two groups overlap? -->
-This makes sure the system isn't hallucinating and doesn't try to confidently answer anything it has no context on. 
+This makes sure the system isn't hallucinating and doesn't try to confidently answer anything it has no context on. But, inevitably it is impossible to catch every potential out-of-scope prompt. That's why it's 4/5 and not 5/5.
 
 ---
 
@@ -67,7 +67,7 @@ This allows us to modify the chunk size and number of chunks dynamically while m
 ---
 
 ## 5. Your choice
-Each response must take less than 1.8 seconds.
+Each response must take less than or equal to 1.8 seconds.
 <!-- YOU WRITE THIS ONE TOO.
 
      Pick something you actually care about getting right. It could be about
@@ -77,7 +77,7 @@ Each response must take less than 1.8 seconds.
      outcome. -->
 
 **Why this target:**
-In a business-critical system, where informaton-based decisions are being made constantly, saving time in how fast one retrieves that information can compound in improving efficiency over time. 
+In a business-critical system, where informaton-based decisions are being made constantly, saving time in how fast one retrieves that information can compound in improving efficiency over time. Given the short length of each response in the chosen corpus, text processing time shouldn't be a big issue, which is why I went with the sub 2 second target. 
 
 ---
 
