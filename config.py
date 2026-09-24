@@ -46,6 +46,17 @@ TOP_K = 5               # how many chunks to pull back per question
 THRESHOLD = 0.70
 
 
+# ─── Response time (criterion 5) ─────────────────────────────────────────────
+# The ceiling your fifth acceptance criterion names, in seconds, for one
+# question going through retrieval + gate + generation.
+#
+# This measures the RESPONSE only. Scoring that response afterwards is a second
+# model call (scorer.py), and it is not part of what a user waits for, so
+# run_eval.py times the response and stops the clock before the judge runs.
+
+RESPONSE_TIME_TARGET = 1.8
+
+
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Embeddings run on your own machine and cost no API quota.
 # Only generation calls out to a service.
@@ -65,7 +76,15 @@ MODEL = os.getenv("AI201_MODEL", "gemini-3.5-flash-lite")
 # You should not need to touch these. They exist so that a runaway loop costs
 # you a warning instead of your whole day's allowance.
 
-REQUESTS_PER_MINUTE = 30       # outgoing calls the limiter will allow per minute
+# The free tier allows 15 generate_content requests per minute per model, and
+# the service says so in its own 429: "limit: 15". This number must be at or
+# under the real one or the limiter is decorative — it waves calls through and
+# the service rejects them, which is a crash rather than a pause.
+#
+# Note that scoring doubles the rate: with scorer.py in place, each question-run
+# is two calls, the answer and the judge. 15/min is the ceiling for both
+# together, which is why an eval paces itself rather than running flat out.
+REQUESTS_PER_MINUTE = 15       # outgoing calls the limiter will allow per minute
 SESSION_REQUEST_BUDGET = 300   # stop and warn rather than draining the daily quota
 MAX_RETRIES = 4                # on 429 / resource-exhausted, with backoff
 

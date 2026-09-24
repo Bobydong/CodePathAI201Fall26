@@ -16,6 +16,11 @@ and records what happened, so criterion 3 — the one about out-of-corpus
 questions — has evidence in the same file as the other four. That part costs
 nothing: a question the gate refuses never reaches the model.
 
+It also times every response — retrieval, gate and generation — and writes a
+table of those times against the target in `config.RESPONSE_TIME_TARGET`, so
+criterion 5 has evidence in the same file as the rest. The clock stops before
+the answer is scored: the judge is a second model call that no user waits for.
+
 That table is the raw material for your run log, not the run log itself. The
 submission template wants one row per *criterion* — aggregating your questions
 up into your criteria is your work, not the script's.
@@ -34,7 +39,9 @@ you a scorer; you'd learn nothing from it.
 
 import argparse
 import datetime as dt
+import statistics
 import sys
+import time
 from pathlib import Path
 
 import config
@@ -51,21 +58,80 @@ def load_scorer():
     return judge if callable(judge) else None
 
 
+def warm_up(corpus, variant):
+    """Load the embedding model before anything is timed.
+
+    store.py loads the embedder lazily, on the first search. That load is tens
+    of megabytes and takes seconds, and it happens once per process — so
+    without this, run 1 of question 1 would be timed with the model download
+    inside it and every later run without. That single number would then be the
+    worst in the table, for a reason that has nothing to do with how fast the
+    system answers.
+
+    A user of a running system never pays that cost, so it does not belong in a
+    measurement of what a user waits for.
+    """
+    from store import search
+
+    print("Loading the embedding model before timing anything...")
+    started = time.perf_counter()
+    search("warm up", top_k=1, corpus=corpus, variant=variant)
+    print(f"  ready in {time.perf_counter() - started:.2f}s (not counted)\n")
+
+
 def run_once(question: str, top_k, threshold, corpus, variant):
-    """One question, one run. Returns the answer and what retrieval gave us."""
+    """One question, one run. Returns the answer, retrieval, gate and timings.
+
+    The clock covers retrieval + gate + generation: everything between the
+    question arriving and the answer being ready, which is what criterion 5 is
+    about. It deliberately stops before `scorer.py` grades the answer — the
+    judge is a second model call that roughly doubles the wall time of an eval,
+    and no user ever waits for it.
+    """
     from store import search
     import gate
+    import generate
     from generate import answer_from_chunks
 
+    started = time.perf_counter()
     results = search(question, top_k=top_k, corpus=corpus, variant=variant)
+    retrieval_seconds = time.perf_counter() - started
+
     decision = gate.check(results, threshold=threshold)
 
     if not decision.passed:
-        return gate.REFUSAL, results, decision
+        total = time.perf_counter() - started
+        timing = {
+            "retrieval": retrieval_seconds,
+            "generation": 0.0,     # refused, so the model was never called
+            "total": total,
+            "waited": 0.0,
+        }
+        return gate.REFUSAL, results, decision, timing
+
+    # Clear any wait the judge's call left behind, so what we subtract below is
+    # this generation's wait and nothing else.
+    generate.take_waited_seconds()
 
     # cache=False on purpose. Three runs have to be three real answers.
+    generation_started = time.perf_counter()
     answer = answer_from_chunks(question, results, cache=False)
-    return answer, results, decision
+    elapsed = time.perf_counter() - generation_started
+
+    # Time spent held back by the free tier's quota is not time the system took
+    # to answer. Counting it would make criterion 5 a measurement of Google's
+    # rate limit rather than of this pipeline. It is reported separately instead
+    # of thrown away, because a run that waited a lot is worth knowing about.
+    waited = generate.take_waited_seconds()
+    generation_seconds = max(elapsed - waited, 0.0)
+
+    timing = {
+        "retrieval": retrieval_seconds,
+        "generation": generation_seconds,
+        "total": retrieval_seconds + generation_seconds,
+        "waited": waited,
+    }
+    return answer, results, decision, timing
 
 
 def main():
@@ -76,11 +142,23 @@ def main():
     parser.add_argument("--variant", default="default")
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument(
+        "--target-seconds",
+        type=float,
+        default=None,
+        help=f"response-time ceiling for criterion 5 "
+             f"(default {config.RESPONSE_TIME_TARGET} from config.py)",
+    )
     args = parser.parse_args()
 
     corpus = args.corpus or config.CORPUS
     top_k = args.top_k or config.TOP_K
     threshold = config.THRESHOLD if args.threshold is None else args.threshold
+    target_seconds = (
+        config.RESPONSE_TIME_TARGET
+        if args.target_seconds is None
+        else args.target_seconds
+    )
 
     items = qs.answered()
     if not items:
@@ -99,6 +177,8 @@ def main():
     if args.runs < 3:
         print(f"⚠️  {args.runs} run(s). The submission asks for three.\n")
 
+    warm_up(corpus, args.variant)
+
     transcript = []
     rows = []
 
@@ -108,15 +188,28 @@ def main():
         print(f"\n{question}")
 
         run_results = []
+        run_timings = []
         for run in range(1, args.runs + 1):
-            answer, results, decision = run_once(
+            answer, results, decision, timing = run_once(
                 question, top_k, threshold, corpus, args.variant
             )
+            run_timings.append(timing)
+
+            # The judge runs after the clock has stopped. See run_once.
             passed = judge(question, expects, answer, results) if judge else None
             run_results.append(passed)
 
             mark = {True: "pass", False: "fail", None: "—"}[passed]
-            print(f"  run {run}: {mark}  (best distance {decision.best_distance:.3f})")
+            within = "✓" if timing["total"] <= target_seconds else "✗"
+            waited = (
+                f", waited {timing['waited']:.0f}s for quota"
+                if timing["waited"] > 0.5 else ""
+            )
+            print(
+                f"  run {run}: {mark}  "
+                f"(best distance {decision.best_distance:.3f}, "
+                f"{timing['total']:.2f}s {within}{waited})"
+            )
 
             transcript.append(
                 {
@@ -126,16 +219,24 @@ def main():
                     "sources": sorted({r.source for r in results}),
                     "best_distance": decision.best_distance,
                     "gate_passed": decision.passed,
+                    "timing": timing,
                 }
             )
 
-        rows.append({"question": question, "expects": expects, "runs": run_results})
+        rows.append(
+            {
+                "question": question,
+                "expects": expects,
+                "runs": run_results,
+                "timings": run_timings,
+            }
+        )
 
     gate_rows = check_out_of_scope(top_k, threshold, corpus, args.variant)
 
     write_report(
         rows, transcript, gate_rows, args, corpus, top_k, threshold,
-        scored=judge is not None,
+        scored=judge is not None, target_seconds=target_seconds,
     )
 
 
@@ -158,16 +259,20 @@ def check_out_of_scope(top_k, threshold, corpus, variant):
     print("\nOut-of-scope questions (the gate should refuse these):")
     rows = []
     for question in questions:
+        started = time.perf_counter()
         results = search(question, top_k=top_k, corpus=corpus, variant=variant)
         decision = gate.check(results, threshold=threshold)
+        elapsed = time.perf_counter() - started
+
         refused = not decision.passed
         print(f"  {'refused' if refused else 'LET THROUGH'}  "
-              f"(best distance {decision.best_distance:.3f})  {question}")
+              f"(best distance {decision.best_distance:.3f}, {elapsed:.2f}s)  {question}")
         rows.append(
             {
                 "question": question,
                 "refused": refused,
                 "best_distance": decision.best_distance,
+                "seconds": elapsed,
             }
         )
 
@@ -176,7 +281,107 @@ def check_out_of_scope(top_k, threshold, corpus, variant):
     return rows
 
 
-def write_report(rows, transcript, gate_rows, args, corpus, top_k, threshold, scored):
+def timing_section(rows, gate_rows, target_seconds):
+    """The evidence for criterion 5, as a table you can read a number off.
+
+    Reports the slowest run per question as well as the median, because the
+    criterion says *each* response, not the average one. An average hides the
+    single four-second outlier that a criterion worded this way is exactly
+    about, so the verdict column is decided by the maximum.
+    """
+    answered = [t for row in rows for t in row["timings"]]
+    if not answered:
+        return []
+
+    totals = [t["total"] for t in answered]
+    retrievals = [t["retrieval"] for t in answered]
+    generations = [t["generation"] for t in answered]
+
+    within = sum(t <= target_seconds for t in totals)
+
+    lines = [
+        "",
+        "---",
+        "",
+        "## Response time (criterion 5)",
+        "",
+        f"Produced by `run_eval.py::run_once`, ceiling {target_seconds}s "
+        f"(`config.RESPONSE_TIME_TARGET`).",
+        "",
+        f"**{within} of {len(totals)} responses came in at or under "
+        f"{target_seconds}s.**",
+        "",
+        "The clock starts when the question arrives and stops when the answer is",
+        "ready: retrieval, the gate, and generation. It does not include scoring —",
+        "`scorer.py` is a second model call that happens after the answer exists and",
+        "that no user waits for. The embedding model is loaded before any timing",
+        "starts, so no run carries the one-off cost of loading it.",
+        "",
+        "Time spent held back by the free tier's per-minute quota is also excluded,",
+        "and reported separately below. That wait is a property of the API plan, not",
+        "of the pipeline, and it would otherwise swamp every other number here.",
+        "",
+        "| Question | " + " | ".join(
+            f"Run {i}" for i in range(1, len(rows[0]["timings"]) + 1)
+        ) + " | Median | Slowest | ≤ target |",
+        "|---|" + "|".join(["---"] * (len(rows[0]["timings"]) + 3)) + "|",
+    ]
+
+    for row in rows:
+        per_run = [t["total"] for t in row["timings"]]
+        slowest = max(per_run)
+        cells = " | ".join(f"{t:.2f}s" for t in per_run)
+        verdict = "yes" if slowest <= target_seconds else "**no**"
+        question = row["question"].replace("|", "\\|")
+        lines.append(
+            f"| {question} | {cells} | {statistics.median(per_run):.2f}s | "
+            f"{slowest:.2f}s | {verdict} |"
+        )
+
+    waits = [t.get("waited", 0.0) for t in answered]
+    if sum(waits) > 0.5:
+        paused = sum(w > 0.5 for w in waits)
+        lines += [
+            f"⏳ {paused} of {len(waits)} runs were paused by the per-minute quota, "
+            f"for {sum(waits):.0f}s in total. That wait is excluded from the times "
+            f"above.",
+            "",
+        ]
+
+    lines += [
+        "",
+        "### Where the time goes",
+        "",
+        "| Stage | Median | Slowest |",
+        "|---|---|---|",
+        f"| Retrieval (local, no API) | {statistics.median(retrievals):.3f}s "
+        f"| {max(retrievals):.3f}s |",
+        f"| Generation (the API call) | {statistics.median(generations):.2f}s "
+        f"| {max(generations):.2f}s |",
+        f"| **Whole response** | **{statistics.median(totals):.2f}s** "
+        f"| **{max(totals):.2f}s** |",
+        "",
+        "Splitting the two matters for diagnosis: if the total misses the target,",
+        "this says whether the cause is something you control (chunking, top-k) or",
+        "the service's latency, and those have completely different fixes.",
+    ]
+
+    if gate_rows and any("seconds" in r for r in gate_rows):
+        refusal_times = [r["seconds"] for r in gate_rows if "seconds" in r]
+        lines += [
+            "",
+            f"Refusals are much faster — median "
+            f"{statistics.median(refusal_times):.3f}s, slowest "
+            f"{max(refusal_times):.3f}s — because a question the gate stops never",
+            "reaches the model. Those are in the out-of-scope table above and are not",
+            "counted in the numbers here, which are about answers.",
+        ]
+
+    return lines
+
+
+def write_report(rows, transcript, gate_rows, args, corpus, top_k, threshold, scored,
+                 target_seconds):
     config.RESULTS_DIR.mkdir(exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
     label = f"_{args.label}" if args.label else ""
@@ -192,7 +397,8 @@ def write_report(rows, transcript, gate_rows, args, corpus, top_k, threshold, sc
         f"- Produced by: `run_eval.py::main`",
         f"- Retrieval: `store.py::search`, chunks from `chunker.py::split_documents`",
         f"- Corpus: `{corpus}` (index variant `{args.variant}`)",
-        f"- top-k: {top_k} · relevance cutoff: {threshold}",
+        f"- top-k: {top_k} · relevance cutoff: {threshold} · "
+        f"response-time target: {target_seconds}s",
         f"- Runs per question: {n}, caching off",
         f"- When: {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "",
@@ -219,6 +425,8 @@ def write_report(rows, transcript, gate_rows, args, corpus, top_k, threshold, sc
             "> the scorer first and re-run.",
         ]
 
+    lines += timing_section(rows, gate_rows, target_seconds)
+
     if gate_rows:
         refused = sum(r["refused"] for r in gate_rows)
         lines += [
@@ -234,13 +442,16 @@ def write_report(rows, transcript, gate_rows, args, corpus, top_k, threshold, sc
             "fixed number, so these do not vary between runs — one pass over the",
             "list is the whole measurement.",
             "",
-            "| Out-of-scope question | Best distance | Gate |",
-            "|---|---|---|",
+            "| Out-of-scope question | Best distance | Gate | Time |",
+            "|---|---|---|---|",
         ]
         for row in gate_rows:
             question = row["question"].replace("|", "\\|")
             verdict = "refused" if row["refused"] else "**let through**"
-            lines.append(f"| {question} | {row['best_distance']:.3f} | {verdict} |")
+            seconds = f"{row['seconds']:.3f}s" if "seconds" in row else "—"
+            lines.append(
+                f"| {question} | {row['best_distance']:.3f} | {verdict} | {seconds} |"
+            )
 
     lines += ["", "---", "", "## Real output", "",
               "This is what the system actually produced. Paste the relevant parts",
@@ -254,6 +465,9 @@ def write_report(rows, transcript, gate_rows, args, corpus, top_k, threshold, sc
             f"- Best distance: {entry['best_distance']:.4f} "
             f"({'passed' if entry['gate_passed'] else 'refused by'} the gate)",
             f"- Sources retrieved: {', '.join(entry['sources']) or 'none'}",
+            f"- Response time: {entry['timing']['total']:.2f}s "
+            f"({entry['timing']['retrieval']:.3f}s retrieval, "
+            f"{entry['timing']['generation']:.2f}s generation)",
             "",
             "```",
             entry["answer"],

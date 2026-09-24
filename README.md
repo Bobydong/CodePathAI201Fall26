@@ -180,17 +180,69 @@ I asked Claude to implement the improved chunking strategy. It did so, but left 
 
      Milestone 1. -->
 
+Source: `results/run_2026-09-23_1642.md`, three runs, caching off, top-k 5,
+cutoff 0.70, response-time target 1.8s.
+
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. | | | | | |
-| 5. | | | | | |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 4. At least 80% of retrieved chunks contain relevant content | 80% | no data | no data | no data | NOT MEASURED |
+| 5. Each response takes ≤ 1.8 seconds | 1.8 sec | 4/5 | 5/5 | 4/5 | MISSED |
+
 
 <!-- Underneath, paste the REAL output for each criterion from one of your
      runs — the actual text your system produced, not a description of it.
      Name the file and function that produced it. -->
+
+
+
+<!--
+It's asking for **evidence**, not more prose. The table above it says `5/5` — a reader has to take that on trust. This section is where you paste the actual text your program printed, so they can check the number themselves.
+
+The contrast the comment is drawing:
+
+- ❌ *a description*: "The gate refused all five out-of-scope questions."
+- ✅ *real output*: the actual block your code produced, pasted verbatim.
+
+"Name the file and function that produced it" means label each excerpt with where it came from — `run_eval.py::check_out_of_scope` — so a grader can rerun it.
+
+You've already generated all of this. It's sitting in [results/run_2026-09-23_1642.md](results/run_2026-09-23_1642.md); this section is just the relevant slices of that file, copied under each criterion. For example, criterion 3 would be:
+
+````markdown
+### Criterion 3 — the gate stops out-of-corpus questions
+
+Produced by `run_eval.py::check_out_of_scope`, cutoff 0.70.
+
+```
+  refused  (best distance 0.893, 0.122s)  What is the capital of Mongolia?
+  refused  (best distance 0.896, 0.113s)  How do I change the oil in a diesel engine?
+  refused  (best distance 0.893, 0.109s)  Who won the 1994 World Cup?
+  refused  (best distance 0.807, 0.115s)  What is the recommended dosage of ibuprofen?
+  refused  (best distance 0.835, 0.117s)  How do I write a for loop in Rust?
+  -> gate refused 5 of 5
+```
+````
+
+That's the whole idea — the number in the table, and directly beneath it the output the number was read off.
+
+What to pull for each one:
+
+| Criterion | What counts as its real output |
+|---|---|
+| 1 | A question's answer plus its `Sources retrieved` line, showing the answer came from a retrieved chunk |
+| 2 | Two or three full answers, with the `thread_*.txt` citations visible in the text |
+| 3 | The gate table above |
+| 4 | Nothing yet — this is the one with no data |
+| 5 | The response-time table, or a few `Response time: 0.93s (0.130s retrieval, 0.80s generation)` lines |
+
+Criterion 4 is the awkward one: there's no output to paste because nothing measures it. The honest move is a line saying so rather than substituting something adjacent that looks like evidence.
+
+Want me to assemble the section from your run log? I'd pull the excerpts for 1, 2, 3 and 5, and write the placeholder for 4. Alternatively, if you'd rather criterion 4 had real data, I could add per-chunk relevance scoring to the eval — that's a larger change and it'd mean another scored run.
+
+-->
+
 
 ## Verdicts
 

@@ -101,6 +101,11 @@ def ask():
             "best_distance": round(outcome["best_distance"], 4),
             "threshold": outcome["threshold"],
             "corpus": config.CORPUS,
+            # Criterion 5. Measured the same way here as on the command line
+            # and in run_eval.py, because all three go through ask_pipeline.
+            "seconds": round(outcome["seconds"], 3),
+            "retrieval_seconds": round(outcome["retrieval_seconds"], 3),
+            "generation_seconds": round(outcome["generation_seconds"], 3),
         }
     )
 

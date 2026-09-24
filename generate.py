@@ -31,6 +31,7 @@ times over.
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -43,6 +44,7 @@ _session_output_tokens = 0
 _cache_hits = 0
 _client = None
 _budget_warned = False
+_waited_seconds = 0.0
 
 
 class QuotaGuard(Exception):
@@ -86,6 +88,50 @@ def clear_cache() -> int:
 # ─── Pacing and guards ───────────────────────────────────────────────────────
 
 
+def take_waited_seconds() -> float:
+    """Seconds spent *waiting* since this was last called, and reset.
+
+    Pacing is not the system being slow, it is the system being polite, and a
+    response-time measurement that counted it would be measuring your free-tier
+    quota rather than your pipeline. `run_eval.py` calls this around the
+    generation step and subtracts what it gets, so a run that happened to sit
+    behind a 57-second quota wait still reports the second it actually took.
+    """
+    global _waited_seconds
+
+    waited = _waited_seconds
+    _waited_seconds = 0.0
+    return waited
+
+
+def _sleep(seconds: float) -> None:
+    """Sleep, and remember that we did. See `take_waited_seconds`."""
+    global _waited_seconds
+
+    if seconds <= 0:
+        return
+    time.sleep(seconds)
+    _waited_seconds += seconds
+
+
+def _retry_after(message: str) -> float | None:
+    """The wait the service asked for, if it named one.
+
+    A 429 from this API carries the answer with it, in two forms:
+    `'retryDelay': '57s'` and "Please retry in 57.110326317s". Guessing with a
+    doubling ladder when the server has told you the number is how a run dies
+    on attempt 4 of 4 having waited 15 seconds for a 57-second window.
+    """
+    for pattern in (
+        r"retrydelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s",
+        r"retry in (\d+(?:\.\d+)?)s",
+    ):
+        found = re.search(pattern, message, re.IGNORECASE)
+        if found:
+            return float(found.group(1))
+    return None
+
+
 def _wait_for_slot() -> None:
     """Sleep, if we've used up this minute's allowance."""
     now = time.monotonic()
@@ -95,15 +141,15 @@ def _wait_for_slot() -> None:
         return
 
     sleep_for = 60.0 - (now - _call_times[0]) + 0.1
-    if sleep_for > 0:
+    if sleep_for >= 1.0:   # below a second it is noise, not news
         print(
             f"  [rate limit] {config.REQUESTS_PER_MINUTE} requests used this "
             f"minute. Waiting {sleep_for:.0f}s. This is normal.",
             file=sys.stderr,
             flush=True,
         )
-        time.sleep(sleep_for)
-        _call_times[:] = [t for t in _call_times if time.monotonic() - t < 60.0]
+    _sleep(sleep_for)
+    _call_times[:] = [t for t in _call_times if time.monotonic() - t < 60.0]
 
 
 def _check_budget() -> None:
@@ -256,18 +302,30 @@ def generate(prompt: str, system: str | None = None, cache: bool = True) -> str:
             )
             if not rate_limited:
                 raise
-            backoff = 2 ** attempt
+
+            # The service usually names the wait it wants. Prefer that over a
+            # guess: the doubling ladder tops out at 8s, and a per-minute quota
+            # routinely needs nearer 60.
+            asked_for = _retry_after(str(exc))
+            backoff = asked_for + 1.0 if asked_for is not None else 2 ** attempt
+            backoff = min(backoff, 90.0)   # a wait this long is already wrong
+
+            source = "service asked for" if asked_for is not None else "backing off"
             print(
-                f"  [rate limit] service pushed back. Retrying in {backoff}s "
-                f"(attempt {attempt + 1} of {config.MAX_RETRIES}).",
+                f"  [rate limit] service pushed back. {source} "
+                f"{backoff:.0f}s (attempt {attempt + 1} of {config.MAX_RETRIES}).",
                 file=sys.stderr,
                 flush=True,
             )
-            time.sleep(backoff)
+            _sleep(backoff)
 
     raise RuntimeError(
-        f"Still rate limited after {config.MAX_RETRIES} attempts. Wait a "
-        f"minute and try again — your key is fine.\nLast error: {last_error}"
+        f"Still rate limited after {config.MAX_RETRIES} attempts.\n"
+        f"Your key is fine — this is the free tier's per-minute quota "
+        f"({config.REQUESTS_PER_MINUTE}/min in config.py).\n"
+        f"If this keeps happening, check that REQUESTS_PER_MINUTE is not above "
+        f"the limit the error below reports, and remember that scoring doubles "
+        f"the number of calls an eval makes.\nLast error: {last_error}"
     )
 
 

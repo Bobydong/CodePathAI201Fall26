@@ -198,17 +198,28 @@ def ask_pipeline(
     decision as soon as it's made, and `on_prompt` is handed the assembled
     prompt just before it goes out — that's how `--show-prompt` shows you the
     prompt while the model is still thinking rather than after.
+
+    The outcome carries `seconds` — how long the whole response took — split
+    into `retrieval_seconds` and `generation_seconds`. Timing lives here rather
+    than in the caller for the same reason the gate does: `serve.py` and the
+    command line would otherwise each measure a slightly different span, and
+    the two would drift. Note that the first question in a process pays for
+    loading the embedding model; `run_eval.py` warms that up before timing, and
+    a single `app.py ask` does not, so its first number is not comparable.
     """
     from store import search
     import gate
     from generate import answer_from_chunks, build_prompt
 
+    started = time.perf_counter()
     results = search(
         question,
         top_k=top_k or config.TOP_K,
         corpus=corpus or config.CORPUS,
         variant=variant,
     )
+    retrieval_seconds = time.perf_counter() - started
+
     decision = gate.check(results, threshold=threshold)
     if on_gate is not None:
         on_gate(decision)
@@ -220,10 +231,13 @@ def ask_pipeline(
         "threshold": decision.threshold,
         "sources": [],
         "prompt": None,
+        "retrieval_seconds": retrieval_seconds,
+        "generation_seconds": 0.0,
     }
 
     if not decision.passed:
         outcome["answer"] = gate.REFUSAL
+        outcome["seconds"] = time.perf_counter() - started
         return outcome
 
     prompt = build_prompt(question, results)
@@ -231,8 +245,13 @@ def ask_pipeline(
         on_prompt(prompt)
 
     outcome["prompt"] = prompt
+
+    generation_started = time.perf_counter()
     outcome["answer"] = answer_from_chunks(question, results)
+    outcome["generation_seconds"] = time.perf_counter() - generation_started
+
     outcome["sources"] = sorted({r.source for r in results})
+    outcome["seconds"] = time.perf_counter() - started
     return outcome
 
 
@@ -275,10 +294,16 @@ def _ask_one(
 
     if outcome["refused"]:
         print(f"\n{gate.REFUSAL}\n")
+        print(f"  ({outcome['seconds']:.2f}s — refused without calling the model)\n")
         return gate.REFUSAL
 
     print(f"\n{outcome['answer']}\n")
-    print(f"Sources retrieved: {', '.join(outcome['sources'])}\n")
+    print(f"Sources retrieved: {', '.join(outcome['sources'])}")
+    print(
+        f"Response time: {outcome['seconds']:.2f}s "
+        f"({outcome['retrieval_seconds']:.3f}s retrieval, "
+        f"{outcome['generation_seconds']:.2f}s generation)\n"
+    )
     return outcome["answer"]
 
 
