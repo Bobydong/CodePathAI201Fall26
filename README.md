@@ -404,6 +404,117 @@ have been revised. Evidence is `results/run_2026-09-23_1642.md`.
 
      Milestone 3. -->
 
+Two criteria were missed, 4 and 5. Both misses land in stages the run log can
+separate: criterion 4 in **retrieval**, criterion 5 in **generation**. Nothing
+went wrong in loading, chunking or embedding.
+
+### Criterion 4 — retrieval pads every question out to five chunks
+
+**Stage: retrieval.** The mechanism is that `config.TOP_K = 5` is a fixed count
+and nothing anywhere filters an individual chunk by distance. `gate.py::check`
+looks at `min(r.distance for r in results)` — the *best* chunk only. Once that
+one chunk is close enough, all five go into the prompt, however far away the
+other four are.
+
+Per-chunk distances, from `store.py::search` (retrieval is local and
+deterministic, so this is reproducible without spending an API call):
+
+```
+How much memory should my laptop have for CS courses?
+   chunk 1: 0.159  thread_laptop_specs.txt
+   chunk 2: 0.230  thread_laptop_specs.txt
+   chunk 3: 0.331  thread_laptop_specs.txt
+   chunk 4: 0.711  thread_pass_fail.txt      <-- past the 0.70 cutoff, sent anyway
+   chunk 5: 0.747  thread_printing.txt       <-- past the 0.70 cutoff, sent anyway
+
+What do people say about the importance of textbook editions?
+   chunk 1: 0.486  thread_textbook_editions.txt
+   chunk 2: 0.492  thread_textbook_editions.txt
+   chunk 3: 0.602  thread_first_gen.txt
+   chunk 4: 0.708  thread_first_year_regret.txt   <-- past the cutoff, sent anyway
+   chunk 5: 0.722  thread_study_spots.txt         <-- past the cutoff, sent anyway
+```
+
+4 of the 25 chunks sent as context are further from the question than 0.70 —
+the same number the system uses to decide a question is too unrelated to answer
+at all. The system is simultaneously saying "0.75 is too far to answer from" and
+handing the model a 0.747 chunk as evidence.
+
+**The pattern, and it is the interesting part:** this happens exactly where the
+corpus is thin on a topic. Each question has two to four genuinely on-topic
+chunks, never five, and there is a visible cliff where the on-topic material
+runs out:
+
+Taking "on topic" as "from the file the answer actually cited", and measuring
+where the first chunk from a *different* file appears:
+
+| Question | Chunks from the cited file | Its furthest | First other-file chunk | Gap | Chunks past 0.70 |
+|---|---|---|---|---|---|
+| Laptop memory | 3 | 0.331 | 0.711 (rank 4) | +0.380 | 2 |
+| Textbook editions | 2 | 0.492 | 0.602 (rank 3) | +0.109 | 2 |
+| Sleep schedule | 3 | 0.416 | 0.647 (rank 4) | +0.231 | 0 |
+| Parking | 3 | 0.464 | 0.485 (rank 4) | +0.021 | 0 |
+| Pass/fail | 4 | 0.473 | 0.447 (rank 4) | −0.026 | 0 |
+
+No question has five chunks' worth of material in its own source file — the most
+is four. The two questions that send chunks past the cutoff, laptop memory and
+textbook editions, are the two with the fewest on-topic chunks (3 and 2) and the
+largest gap before the padding starts. Where there is more material the padding
+is harmless or genuinely relevant: the parking question's extra chunks come from
+`thread_bike_commute.txt` at 0.485, arguably on topic for whether driving is
+worth it, and the pass/fail question's other-file chunk actually *outranks* one of
+its own-file chunks (0.447 against 0.473), so it is not padding at all — it is a
+relevant chunk from a second thread.
+
+Nothing is wrong with retrieval's *ranking*: chunk 1 is the right chunk every
+time, which is why criterion 1 passed 5 of 5. What is wrong is that a fixed `k`
+forces retrieval to keep going after it has run out of relevant material, and no
+per-chunk check stops the result.
+
+**Caveat, stated plainly:** the above is distance, not relevance, and criterion 4
+asks about relevance. Distance is a proxy. Reading the retrieved files by hand
+gives roughly 16 of 25 chunks on topic (64%), which is under the 80% target —
+but that is my own judgement of five filenames, not a measurement, which is why
+criterion 4 is recorded as MISSED for want of evidence rather than as a
+demonstrated 64%.
+
+### Criterion 5 — two misses, two different causes, both in generation
+
+**Stage: generation, for both.** Retrieval cannot be the cause: it ran at 0.130s
+median across all 15 runs and never exceeded 0.248s, against a 1.8s budget.
+
+**Miss 1 — the parking question, 7.48s on run 3. Not a defect in this system.**
+Retrieval is deterministic, so run 3 sent the model exactly the same five chunks
+and the same prompt as runs 1 and 2. Those took 0.70s and 0.71s. Run 3 took
+7.26s and produced a *shorter* answer than either:
+
+```
+Is it worth it do get a parking permit?
+  run 1: 0.70s for 183 chars   (3.8 ms/char)
+  run 2: 0.71s for 183 chars   (3.9 ms/char)
+  run 3: 7.26s for 164 chars   (44.3 ms/char)
+```
+
+Same input, less output, ten times the time. Nothing in the pipeline varied
+between those three calls, so the cause is latency on Google's side. This is not
+something chunking, top-k or the prompt can fix.
+
+**Miss 2 — the pass/fail question, 2.29s on run 1. Partly ours.** This is the
+question that produces long answers: 520 to 707 characters, against 76 to 354 for
+every other question. Its chunks cover four separate sub-topics (when to use
+pass/fail, graduate-school prerequisites, the week-eight deadline, the
+two-per-year limit) and `GROUNDING_INSTRUCTION` says "Be brief. Two or three
+sentences is usually enough" without enforcing any limit, so the model answers
+all four. More output tokens means more generation time. Across the 14 runs that
+exclude the 7.26s outlier, answer length and generation time correlate at +0.55.
+
+So the honest split on criterion 5 is that one of the two misses is the service
+being slow and one is the system being verbose, and only the second is mine to
+fix. With the outlier excluded the slowest response is 2.15s, still over target —
+so even a perfectly behaved API would leave this criterion missed, and the 1.8s
+target itself is inside the range the API varies over anyway (0.42s to 2.15s of
+generation time on identical infrastructure).
+
 ## The Improvement
 
 **What I changed:**
