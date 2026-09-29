@@ -192,9 +192,127 @@ cutoff 0.70, response-time target 1.8s.
 | 5. Each response takes ≤ 1.8 seconds | 1.8 sec | 4/5 | 5/5 | 4/5 | MISSED |
 
 
-<!-- Underneath, paste the REAL output for each criterion from one of your
-     runs — the actual text your system produced, not a description of it.
-     Name the file and function that produced it. -->
+### Real output
+
+Every excerpt below is copied verbatim from `results/run_2026-09-23_1642.md`.
+Nothing here is retyped or summarised.
+
+#### Criterion 1 — the retrieved chunks contain the answer
+
+Produced by `store.py::search` (chunks from `chunker.py::split_documents`),
+scored by `scorer.py::judge`. The `expects` value for this question was `16 GB`.
+
+```
+### How much memory should my laptop have for CS courses? — run 1
+
+- Best distance: 0.1592 (passed the gate)
+- Sources retrieved: thread_laptop_specs.txt, thread_pass_fail.txt, thread_printing.txt
+- Response time: 1.68s (0.134s retrieval, 1.55s generation)
+
+Your laptop should have 16GB of RAM. According to `thread_laptop_specs.txt`, 16GB is the one number worth paying for, and having only 8GB can cause issues on heavy final projects.
+```
+
+The answer gives the right figure and attributes it to `thread_laptop_specs.txt`,
+which is in the retrieved list — so the chunk that held the answer was retrieved.
+All 5 questions scored pass on all 3 runs.
+
+#### Criterion 2 — every answer names a source
+
+Produced by `generate.py::answer_from_chunks` under `GROUNDING_INSTRUCTION`.
+Three answers from three different questions, with the citation in each:
+
+```
+### What do people say about the importance of textbook editions? — run 1
+
+According to *thread_textbook_editions.txt*, you should ask the instructor directly about textbook editions, as most will say the previous edition is fine even if they cannot put that in the syllabus for procurement reasons. Additionally, the library reserve copy is always the current edition, allowing you to check the numbering against yours for free.
+```
+
+```
+### Is it worth it do get a parking permit? — run 3
+
+According to *thread_parking.txt*, a parking permit is worth getting if you are commuting daily (specifically the west permit), but otherwise you should not bother.
+```
+
+```
+### Does fixing a sleep schedule matter? — run 2
+
+Yes, fixing a sleep schedule matters. According to `thread_sleep_schedule.txt`, one user notes that scheduling no classes before 10am helped them rather than trying to become a morning person, and Counselling offers a practical, free four-session workshop on the topic.
+```
+
+All 15 answers in the run log name a `.txt` file this way.
+
+#### Criterion 3 — the gate stops out-of-corpus questions
+
+Produced by `run_eval.py::check_out_of_scope`, using `gate.py::check` against the
+0.70 cutoff in `config.py`:
+
+```
+| Out-of-scope question | Best distance | Gate | Time |
+|---|---|---|---|
+| What is the capital of Mongolia? | 0.893 | refused | 0.122s |
+| How do I change the oil in a diesel engine? | 0.896 | refused | 0.113s |
+| Who won the 1994 World Cup? | 0.893 | refused | 0.109s |
+| What is the recommended dosage of ibuprofen for a headache? | 0.807 | refused | 0.115s |
+| How do I write a for loop in Rust? | 0.835 | refused | 0.117s |
+```
+
+Every distance is 0.807 or worse against a 0.70 cutoff, so all five were refused
+before reaching the model. Each returned `gate.py::REFUSAL`:
+"I don't have enough information about that."
+
+#### Criterion 4 — at least 80% of retrieved chunks contain relevant content
+
+**No output to paste. Nothing in the pipeline measures this.**
+
+`run_eval.py` records which source *files* retrieval returned, not the text of
+each of the 25 chunks (top-k 5 × 5 questions) or whether each one was relevant.
+The closest thing the log holds is the file list, which is suggestive but is not
+the measurement:
+
+```
+### What do people say about the importance of textbook editions? — run 1
+
+- Sources retrieved: thread_first_gen.txt, thread_first_year_regret.txt, thread_study_spots.txt, thread_textbook_editions.txt
+```
+
+Three of those four files have nothing to do with textbook editions. That is a
+reason to expect this criterion to be missed, but it does not establish the
+chunk-level percentage, because several chunks can come from one file.
+
+#### Criterion 5 — each response takes 1.8 seconds or less
+
+Produced by `run_eval.py::run_once`, which times `store.py::search` plus
+`generate.py::answer_from_chunks`. Scoring is excluded from the clock, and so is
+time spent held back by the free tier's quota.
+
+```
+| Question | Run 1 | Run 2 | Run 3 | Median | Slowest | ≤ target |
+|---|---|---|---|---|---|---|
+| How much memory should my laptop have for CS courses? | 1.68s | 1.12s | 0.54s | 1.12s | 1.68s | yes |
+| What do people say about using pass/fail for grades? | 2.29s | 0.93s | 1.26s | 1.26s | 2.29s | **no** |
+| Is it worth it do get a parking permit? | 0.95s | 0.89s | 7.48s | 0.95s | 7.48s | **no** |
+| What do people say about the importance of textbook editions? | 0.93s | 0.94s | 0.92s | 0.93s | 0.94s | yes |
+| Does fixing a sleep schedule matter? | 0.82s | 0.84s | 0.82s | 0.82s | 0.84s | yes |
+```
+
+13 of 15 under the target. The two that missed, with the retrieval/generation
+split that shows where the time went:
+
+```
+### What do people say about using pass/fail for grades? — run 1
+
+- Response time: 2.29s (0.137s retrieval, 2.15s generation)
+```
+
+```
+### Is it worth it do get a parking permit? — run 3
+
+- Response time: 7.48s (0.224s retrieval, 7.26s generation)
+```
+
+Neither miss was caused by retrieval, which stayed at 0.130s median across all
+15 runs. Both were the API call. The same parking question answered in 0.95s and
+0.89s on its other two runs.
 
 
 
@@ -255,13 +373,16 @@ Want me to assemble the section from your run log? I'd pull the excerpts for 1, 
 
      Milestone 2. -->
 
+Judged against the targets as written in `criteria.md` in unit 1. None of them
+have been revised. Evidence is `results/run_2026-09-23_1642.md`.
+
 | # | Criterion | Verdict | How I decided |
 |---|---|---|---|
-| 1 |  |  |  |
-| 2 |  |  |  |
-| 3 |  |  |  |
-| 4 |  |  |  |
-| 5 |  |  |  |
+| 1 | For at least 4 of 5 questions, the retrieved chunks include one containing the answer | MET | 5 of 5 on all three runs, so the target holds on every run and not just on average. Judged indirectly, and that is the weak point: `scorer.py::judge` grades the *answer*, not the chunk. I am relying on the fact that the gate passed, `GROUNDING_INSTRUCTION` confines the model to the retrieved text, and each answer both gave the right fact and cited a file that retrieval had returned — an answer cannot be right under those conditions unless the chunk carried the answer. A stricter reading of this criterion would require reading the 5 chunks per question myself. |
+| 2 | Every answer names at least one source document | MET | 15 of 15 answers name a `.txt` file. I checked this by reading all fifteen rather than by counting the `Sources retrieved` lines, because those record what retrieval returned, which is a different claim from what the answer says. The target is "every", so one bare answer would have failed it; there were none. |
+| 3 | The gate refuses out-of-corpus questions in at least 4 of 5 tries | MET | 5 of 5 refused, and not narrowly: the closest out-of-scope question sat at 0.807 against a 0.70 cutoff, a margin of 0.107, while the worst in-scope question was 0.486. The two groups do not overlap, so this is a comfortable pass rather than a lucky one. Reported once rather than three times because retrieval is deterministic and the gate is a fixed comparison — re-running it cannot produce a different answer. |
+| 4 | At least 80% of retrieved chunks contain relevant content | MISSED | Not measured, and an unmeasured criterion cannot be claimed as MET. Nothing in the pipeline records per-chunk relevance: with top-k 5 there are 25 chunks of context per run, and the harness logs only which files came back. This is a hole in my instrumentation rather than a demonstrated failure, and I have recorded it as MISSED instead of leaving it blank because the honest position is that I have no evidence either way. What evidence there is points the wrong way — the textbook question retrieved four files, three unrelated to textbook editions. |
+| 5 | Each response takes 1.8 seconds or less | MISSED | 13 of 15. The pass/fail question took 2.29s on run 1 and the parking question 7.48s on run 3. The criterion says *each* response, so two breaches is a miss even though the median was 0.93s and 13 runs were comfortably inside. Retrieval was not the cause: it held at 0.130s median while generation ranged from 0.54s to 7.26s, so the variance is the API call. |
 
 ## Diagnoses
 
