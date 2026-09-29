@@ -519,32 +519,105 @@ generation time on identical infrastructure).
 
 **What I changed:**
 
+`GROUNDING_INSTRUCTION` in `generate.py`. The old version said *"Be brief. Two or
+three sentences is usually enough"* — a suggestion with a hedge in it. The new
+version sets a hard limit, tells the model not to volunteer material the question
+didn't ask for, and makes the citation non-negotiable so that brevity can't be
+bought by dropping the filename:
+
+```
+- Answer in at most two sentences. This is a hard limit, not a guideline.
+- Answer only what was asked. The documents usually contain related facts the
+  question did not ask about — leave them out rather than listing everything
+  you found.
+- Every answer must name the file its information came from, using the filename
+  given in the excerpt. This is required even under the two-sentence limit:
+  never drop the filename to save room.
+```
+
 **Why I picked it:**
 
-<!-- Connect it to a specific diagnosis above in one sentence. If you can't,
-     you picked a fix because it sounded impressive. -->
+It targets the second of the two causes diagnosed under criterion 5: the
+pass/fail question was producing 520–707 character answers covering four
+sub-topics because the old instruction never enforced the brevity it asked for,
+and across the 14 non-outlier runs answer length and generation time correlated
+at +0.55.
 
 ### Run Log — After
 
-<!-- Same format, same five criteria, three runs each.
-     `python run_eval.py --label after` -->
+`results/run_2026-09-28_2246_after.md`, three runs, caching off, same top-k 5 and
+0.70 cutoff as before.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. | | | | | |
-| 5. | | | | | |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 4. At least 80% of retrieved chunks contain relevant content | 80% | no data | no data | no data | MISSED |
+| 5. Each response takes ≤ 1.8 seconds | 1.8 sec | 4/5 | 4/5 | 4/5 | MISSED |
 
 **Did it help?**
 
-<!-- Say plainly whether it did, and how you know. If it made things worse,
-     say that — a change that backfired, honestly reported, earns full credit
-     and is more interesting than one that worked. What matters is that you can
-     tell.
+**No. Criterion 5 got worse: 12 of 15 responses under target, down from 13 of
+15.** The change did exactly what it was designed to do and the criterion still
+moved the wrong way.
 
-     Milestone 4. -->
+What the change achieved, measured against the before run:
+
+| | Before | After | Change |
+|---|---|---|---|
+| Mean answer length | 306 chars | 120 chars | −61% |
+| Longest answer | 707 chars | 211 chars | −70% |
+| Answers over the two-sentence limit | 3 of 15 | 0 of 15 | fixed |
+| Answers still naming a source | 15 of 15 | 15 of 15 | held |
+| **Responses under 1.8s** | **13 of 15** | **12 of 15** | **worse** |
+| Median response time | 0.93s | 1.02s | slower |
+| Slowest response | 7.48s | 13.03s | worse |
+
+So the instruction worked and the hypothesis behind it was wrong. Answers are 61%
+shorter, nothing exceeded the two-sentence limit, and no answer lost its
+citation — criterion 2 survived the squeeze, which was the risk I was worried
+about. The pass/fail question that used to be the slowest is now comfortably
+inside target on all three runs (0.92s, 0.84s, 0.78s, down from 2.29s at its
+worst).
+
+But two *different* questions missed instead, and they are the evidence that
+length was never the real driver:
+
+```
+How much memory should my laptop have for CS courses? — run 3
+  4.47s response (4.36s generation) for an answer of 74 characters
+
+Does fixing a sleep schedule matter? — run 1
+  13.03s response (12.89s generation) for an answer of 70 characters
+```
+
+Those are among the shortest answers in the whole run, and they were the two
+slowest responses. The cleanest single piece of evidence is the sleep question,
+which produced an answer of **exactly 70 characters on both run 1 and run 3**:
+
+```
+run 1:  70 chars → 13.03s
+run 3:  70 chars →  1.31s
+```
+
+Identical question, identical retrieved chunks, identical answer length, and a
+tenfold difference in time. Whatever governs generation time here, it is not how
+much text comes back.
+
+The +0.55 correlation I diagnosed from the before run was real in that data but
+not causal, and with n=14 it was reading a pattern into noise. Cutting output by
+61% moved the median the *wrong* way, from 0.93s to 1.02s. The honest conclusion
+is that generation latency on this API varies by more than an order of magnitude
+(0.42s to 12.89s across the two runs) for reasons on Google's side, and a 1.8s
+target sits well inside that variance. Criterion 5 was never winnable by changing
+the prompt, and a third run would likely produce a third different set of misses.
+
+What I would do differently: pick the retrieval fix instead. Criterion 4's
+diagnosis — fixed `top_k=5` with no per-chunk distance filter, sending chunks at
+0.711 and 0.747 past the system's own 0.70 cutoff — describes a defect that is
+deterministic and entirely inside my code, so a fix for it could actually be
+shown to work. Criterion 5's remaining cause is somebody else's server.
 
 ## What's Still Broken
 

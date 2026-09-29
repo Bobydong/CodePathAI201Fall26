@@ -300,19 +300,39 @@ def generate(prompt: str, system: str | None = None, cache: bool = True) -> str:
                 or "resource" in message and "exhaust" in message
                 or "rate" in message and "limit" in message
             )
-            if not rate_limited:
+            # A 5xx is the service having a bad moment, not you going too fast.
+            # These are transient and retrying is the correct response, but the
+            # rate-limit check above does not match them, so before this a single
+            # 503 — or 500, which this API also returns under load — ended a whole
+            # eval on question four of five. Same ladder, different cause.
+            #
+            # Matched as a class rather than code by code: the failure mode is
+            # "server-side and temporary", and enumerating one number at a time
+            # just means the next unhandled code stops the next run.
+            overloaded = (
+                any(code in message for code in ("500", "502", "503", "504"))
+                or "unavailable" in message
+                or "internal error" in message
+                or "high demand" in message
+                or "deadline" in message and "exceed" in message
+            )
+            if not (rate_limited or overloaded):
                 raise
 
             # The service usually names the wait it wants. Prefer that over a
             # guess: the doubling ladder tops out at 8s, and a per-minute quota
             # routinely needs nearer 60.
             asked_for = _retry_after(str(exc))
-            backoff = asked_for + 1.0 if asked_for is not None else 2 ** attempt
+            if asked_for is not None:
+                backoff = asked_for + 1.0
+            else:
+                backoff = max(2 ** attempt, 2.0)
             backoff = min(backoff, 90.0)   # a wait this long is already wrong
 
+            label = "overloaded" if overloaded and not rate_limited else "rate limit"
             source = "service asked for" if asked_for is not None else "backing off"
             print(
-                f"  [rate limit] service pushed back. {source} "
+                f"  [{label}] service pushed back. {source} "
                 f"{backoff:.0f}s (attempt {attempt + 1} of {config.MAX_RETRIES}).",
                 file=sys.stderr,
                 flush=True,
@@ -320,7 +340,7 @@ def generate(prompt: str, system: str | None = None, cache: bool = True) -> str:
             _sleep(backoff)
 
     raise RuntimeError(
-        f"Still rate limited after {config.MAX_RETRIES} attempts.\n"
+        f"Still being pushed back after {config.MAX_RETRIES} attempts.\n"
         f"Your key is fine — this is the free tier's per-minute quota "
         f"({config.REQUESTS_PER_MINUTE}/min in config.py).\n"
         f"If this keeps happening, check that REQUESTS_PER_MINUTE is not above "
@@ -331,14 +351,23 @@ def generate(prompt: str, system: str | None = None, cache: bool = True) -> str:
 
 # ─── The grounded answer ─────────────────────────────────────────────────────
 
+# Revised in unit 2. The previous version said "Be brief. Two or three sentences
+# is usually enough", which is a suggestion with a hedge in it and was ignored on
+# exactly the question that needed it: the pass/fail question produced 520-707
+# characters covering four separate sub-topics, and its slowest run missed the
+# 1.8s target at 2.29s. The two changes below are a hard sentence limit and an
+# instruction to answer only what was asked. The citation rule is stated last and
+# made non-negotiable, because the obvious way for a model to satisfy a tight
+# length limit is to drop the filename — which would trade criterion 5 for
+# criterion 2.
 GROUNDING_INSTRUCTION = """You answer questions using only the documents provided to you.
 
 Rules:
 - Use only the information in the documents below. Do not use anything you know from elsewhere.
 - If the documents don't cover the question, say you don't have enough information. Do not guess.
-- Name the document your answer came from, using the filename given in each excerpt.
-- Be brief. Two or three sentences is usually enough.
-- Always cite the document a piece of information came from (e.g. "According to ...", "From ...", etc)
+- Answer in at most two sentences. This is a hard limit, not a guideline.
+- Answer only what was asked. The documents usually contain related facts the question did not ask about — leave them out rather than listing everything you found.
+- Every answer must name the file its information came from, using the filename given in the excerpt (e.g. "According to thread_x.txt, ..."). This is required even under the two-sentence limit: never drop the filename to save room.
 
 """
 
