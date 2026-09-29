@@ -629,9 +629,145 @@ shown to work. Criterion 5's remaining cause is somebody else's server.
 
      Milestone 5. -->
 
+Two criteria are still missed: 4 and 5. Criterion 4 is unchanged because my fix
+was aimed elsewhere, and criterion 5 is slightly worse than before.
+
+### Criterion 4 — still not measured, still not fixed
+
+**What I'd do.** The fix and its expected effect are both already worked out; I
+just didn't spend the improvement on them. Add a per-chunk distance filter so
+that a chunk is dropped when it is too far from the question, instead of the gate
+checking only the closest one. I modelled the candidates against the real
+distances from `store.py::search` — retrieval is local and deterministic, so this
+costs no API calls:
+
+| Option | On-topic share | Chunks sent | Relevant chunks kept |
+|---|---|---|---|
+| now: `top_k=5`, no filter | 60% | 25 | 15 of 15 |
+| `top_k=3` | 93% | 15 | 14 |
+| `top_k=2` | 100% | 10 | 10 |
+| `top_k=5` + per-chunk cut at 0.60 | 83% | 18 | **15 of 15** |
+
+The per-chunk filter is the one I would pick, and not because it scores highest —
+`top_k=3` does. It is the only option that clears the 80% target without throwing
+away a single relevant chunk, because it adapts to how much material each question
+actually has: it keeps 2 chunks for the textbook question, which only has 2 good
+ones, and all 5 for the pass/fail question, which has 5. Lowering `top_k` to 3
+scores better on these five questions by luck rather than by mechanism — it would
+still pad a question that has only one good chunk, and would truncate one that has
+six. It also discards a chunk that was genuinely relevant (`thread_first_year_regret.txt`
+at 0.447, which outranked one of the pass/fail question's own-file chunks).
+
+**Second, and it has to come first:** this criterion needs instrumentation before
+any fix can be shown to work. Right now `run_eval.py` logs which source *files*
+came back, not each chunk's distance or whether it was relevant, which is why the
+verdict is "no data" in both the before and after tables. A fix with no
+measurement either side of it would be an assertion, not a result.
+
+**Why I stopped here.** I had one improvement cycle and spent it on the prompt
+change instead, because response time was already instrumented and the edit was a
+single string — I could measure the result immediately, whereas criterion 4 needed
+new logging built first. That was a reasonable bet and it lost: the prompt change
+did what it was designed to do and the criterion it targeted got worse anyway.
+Given the same choice again I would build the chunk-relevance logging and do the
+retrieval fix, because it addresses a defect that is deterministic and entirely
+inside my own code, so the result would be legible either way.
+
+### Criterion 5 — missed, and probably not winnable as written
+
+**What I'd do: stop trying to fix the system and fix the criterion.** Not by
+lowering 1.8s — by changing what the measurement is taken over. The evidence from
+two full runs is that generation time on `gemini-3.5-flash-lite` varies from 0.42s
+to 12.89s for the same question with the same chunks and the same prompt, while
+retrieval — the part I wrote — held between 0.109s and 0.248s in all 30 runs. A
+ceiling on *each individual response* is a claim about the worst case of a
+third-party service's latency distribution, and no change I make to chunking,
+top-k or the prompt moves it.
+
+Three things I would try, in order of how much they'd actually tell me:
+
+1. **Split the criterion at the boundary I control.** A hard ceiling on retrieval
+   (which has never exceeded 0.25s and would pass comfortably) and a separate,
+   percentile-based figure for end-to-end time. That measures my pipeline and the
+   service as the two different things they are.
+2. **Restate it as a percentile rather than a maximum** — "90% of responses under
+   2s" — which is how latency targets are normally written, and for the reason
+   visible here: a single outlier makes an absolute ceiling unmeetable without
+   telling you anything about typical behaviour. The medians were 0.93s and 1.02s.
+3. **Run more than three times per question.** With n=3 per question, one bad
+   call decides the verdict. The before and after runs missed on completely
+   different questions, which is a sign I am sampling noise rather than measuring
+   a property of the system.
+
+**Why I stopped here.** The remaining cause is a server I do not control, and I
+could not find a change on my side that moves it — the one I tried made the median
+slightly worse. I did not rewrite the criterion because `criteria.md` is explicit
+that lowering a target you missed is not a revision and costs the point, and from
+the outside "a percentile would be a better shape for this" is very hard to
+distinguish from "I would like an easier number." I would rather leave it recorded
+as MISSED with the reasoning written down than change the goalposts after seeing
+the result. The 1.8s figure stays where it is.
+
 ## What I'd Do Differently
 
 <!-- Knowing what you know now — which of your five criteria would you write
      differently, and why?
 
      Milestone 5. -->
+
+The pattern across all five: the two criteria that worked named something a
+program could check without me in the loop. The three that gave trouble all
+needed a human judgement I hadn't defined in advance.
+
+**Criterion 4 is the one I would rewrite, and it is the only one that was
+genuinely broken.** *"At least 80% of the chunks that are retrieved and given as
+context must contain relevant content"* contains a word I never defined —
+"relevant" — and no way to check it. Every other criterion produced a number in
+the run log; this one is still "no data" in both tables, not because I ran out of
+time but because the sentence does not say what to measure. I would write it as
+something my code can decide:
+
+> No chunk sent to the model is further from the question than the cutoff the
+> gate uses to refuse it.
+
+That is deterministic, needs no judgement, takes one line in the eval to check,
+and it is a stricter test of the same underlying worry. It also catches the actual
+defect I found: the system currently calls 0.75 too far to answer from while
+handing the model a 0.747 chunk as evidence. My original wording could not have
+found that, because I had no way to evaluate it at all.
+
+**Criterion 5 I would write with a different shape, not a different number.** The
+1.8s was a reasonable guess made before I had measured anything, and the number
+is not really the problem — *"each response"* is. That makes the verdict depend on
+the worst single call to somebody else's server, and the two runs missed on
+different questions each time, which means the criterion is mostly measuring
+Google's variance. I would target the part I wrote with a hard ceiling and the
+end-to-end path with a percentile. I am keeping the original as written, since
+rewriting it after missing it is exactly the move `criteria.md` says not to make.
+
+**Criterion 1 I would make checkable directly.** *"The retrieved chunks include
+one that contains the answer"* is about retrieval, but I have no way to test it
+except by looking at whether the answer came out right, which is a test of the
+whole pipeline. It passed 5 of 5 twice, and I believe the verdict — but the
+reasoning goes through the gate, the grounding instruction and the model's
+behaviour to reach a conclusion about retrieval, and any of those could break the
+chain. I would state it in terms of the chunk text: at least one retrieved chunk
+contains the `expects` string, checked in code against the chunks and not the
+answer.
+
+**Criteria 2 and 3 I would keep exactly as they are, and they are worth
+mentioning because they are the ones that worked.** Both name something
+observable, both were checkable the same way twice, and neither needed me to
+decide what a word meant after the fact. Criterion 3 is the strongest of the five:
+it turned out to have a clean margin — the closest out-of-corpus question sat at
+0.807 against a 0.70 cutoff while the worst in-corpus question was 0.486, so the
+two groups never came near overlapping. Criterion 2 is the one I nearly broke
+without noticing: the two-sentence limit gave the model an obvious reason to drop
+the filename, and it held at 15 of 15 only because I wrote the citation rule as
+non-negotiable in the same edit. That was luck dressed as foresight, and a
+criterion I was already measuring is what would have caught it.
+
+**The lesson I would take into the next one.** Before writing a criterion, I would
+ask how the eval script will decide it. If the answer needs me to read the output
+and make a call, it is not a criterion yet — it is an opinion with a number
+attached, and criterion 4 is what that looks like three weeks later.
